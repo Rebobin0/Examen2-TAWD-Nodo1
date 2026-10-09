@@ -1,0 +1,529 @@
+openapi: 3.0.3
+info:
+  title: Banco Central · API del sistema bancario distribuido (Nodo 1)
+  version: 1.0.0
+  description: |
+    API del Banco Central, expuesta por Supabase (Auth + PostgREST).
+
+    - **Administradores:** inician sesión en `/auth/v1/token` y llaman a las funciones
+      `admin_*` con su JWT. Es lo que hace el panel Laravel del Nodo 1.
+    - **Nodos (sucursales y cajeros):** llaman a las funciones de operación enviando su
+      API Key en el campo `p_api_key`. Es lo que hacen los Nodos 2 y 3.
+
+    Ningún cliente modifica tablas directamente: los saldos solo cambian dentro de estas
+    funciones, que validan el API Key y registran la transacción de forma atómica.
+servers:
+  - url: https://gfowuzceewudyclffxfy.supabase.co
+    description: Proyecto de Supabase (Banco Central)
+tags:
+  - name: Autenticación
+  - name: Administración
+    description: Requieren el JWT de un usuario registrado en la tabla `admins`.
+  - name: Operaciones de nodo
+    description: Requieren el API Key de una sucursal o cajero activo.
+security:
+  - ClaveAnon: []
+paths:
+  /auth/v1/token:
+    post:
+      tags: [Autenticación]
+      summary: Iniciar sesión como administrador
+      parameters:
+        - name: grant_type
+          in: query
+          required: true
+          schema: { type: string, enum: [password, refresh_token] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                refresh_token: { type: string, description: Solo con grant_type=refresh_token }
+      responses:
+        '200':
+          description: Sesión iniciada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  refresh_token: { type: string }
+                  expires_in: { type: integer, example: 3600 }
+                  user:
+                    type: object
+                    properties:
+                      id: { type: string, format: uuid }
+                      email: { type: string, format: email }
+        '400': { description: Credenciales incorrectas }
+  /rest/v1/rpc/es_admin:
+    post:
+      tags: [Administración]
+      summary: Indica si el usuario autenticado es administrador
+      security: [{ ClaveAnon: [], JwtAdmin: [] }]
+      requestBody: { $ref: '#/components/requestBodies/Vacio' }
+      responses:
+        '200':
+          description: true si el usuario está en la tabla admins
+          content: { application/json: { schema: { type: boolean } } }
+  /rest/v1/rpc/admin_crear_nodo:
+    post:
+      tags: [Administración]
+      summary: Crear una sucursal o cajero y generar su API Key
+      description: El API Key se devuelve en claro una sola vez; en la base se guarda su hash SHA-256.
+      security: [{ ClaveAnon: [], JwtAdmin: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [p_tipo, p_nombre]
+              properties:
+                p_tipo: { type: string, enum: [sucursal, cajero] }
+                p_nombre: { type: string, example: Sucursal Centro }
+                p_responsable: { type: string, example: Ana López }
+                p_efectivo_inicial: { type: number, minimum: 0, example: 50000 }
+      responses:
+        '200':
+          description: Nodo creado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/NodoBasico'
+                  - type: object
+                    properties:
+                      api_key: { type: string, example: bk_suc_1a2b3c... }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /rest/v1/rpc/admin_regenerar_api_key:
+    post:
+      tags: [Administración]
+      summary: Invalidar el API Key de un nodo y generar uno nuevo
+      security: [{ ClaveAnon: [], JwtAdmin: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [p_nodo_id]
+              properties:
+                p_nodo_id: { type: string, format: uuid }
+      responses:
+        '200':
+          description: API Key nuevo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  api_key: { type: string }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /rest/v1/rpc/admin_nodos:
+    post:
+      tags: [Administración]
+      summary: Listar sucursales y cajeros
+      security: [{ ClaveAnon: [], JwtAdmin: [] }]
+      requestBody: { $ref: '#/components/requestBodies/Vacio' }
+      responses:
+        '200':
+          description: Lista de nodos (sin el hash del API Key)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Nodo' }
+        '403': { $ref: '#/components/responses/Error' }
+  /rest/v1/rpc/admin_actualizar_nodo:
+    post:
+      tags: [Administración]
+      summary: Editar nombre, responsable, efectivo disponible y estado de un nodo
+      security: [{ ClaveAnon: [], JwtAdmin: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [p_nodo_id, p_nombre, p_responsable, p_efectivo_disponible, p_estado]
+              properties:
+                p_nodo_id: { type: string, format: uuid }
+                p_nombre: { type: string }
+                p_responsable: { type: string, description: Cadena vacía para dejarlo sin asignar }
+                p_efectivo_disponible: { type: number, minimum: 0 }
+                p_estado: { type: string, enum: [activo, inactivo] }
+      responses:
+        '200':
+          description: Nodo actualizado
+          content: { application/json: { schema: { $ref: '#/components/schemas/Nodo' } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /rest/v1/rpc/admin_cambiar_estado:
+    post:
+      tags: [Administración]
+      summary: Activar o desactivar un nodo
+      security: [{ ClaveAnon: [], JwtAdmin: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [p_nodo_id, p_estado]
+              properties:
+                p_nodo_id: { type: string, format: uuid }
+                p_estado: { type: string, enum: [activo, inactivo] }
+      responses:
+        '200':
+          description: Nodo actualizado
+          content: { application/json: { schema: { $ref: '#/components/schemas/Nodo' } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /rest/v1/rpc/admin_historial:
+    post:
+      tags: [Administración]
+      summary: Historial global de transacciones con filtros
+      security: [{ ClaveAnon: [], JwtAdmin: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                p_nodo_id: { type: string, format: uuid, description: Filtrar por sucursal o cajero }
+                p_tipo: { type: string, enum: [retiro, deposito, transferencia] }
+                p_cuenta: { type: string }
+                p_desde: { type: string, format: date-time }
+                p_hasta: { type: string, format: date-time, description: Límite exclusivo }
+                p_limite: { type: integer, default: 50, maximum: 5000 }
+                p_offset: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: Página del historial
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  monto_total: { type: number }
+                  filas:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/Transaccion'
+                        - type: object
+                          properties:
+                            nodo_nombre: { type: string }
+                            nodo_tipo: { type: string, enum: [sucursal, cajero] }
+        '403': { $ref: '#/components/responses/Error' }
+  /rest/v1/rpc/admin_reporte:
+    post:
+      tags: [Administración]
+      summary: Reporte administrativo de operaciones en un periodo
+      security: [{ ClaveAnon: [], JwtAdmin: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                p_desde: { type: string, format: date-time }
+                p_hasta: { type: string, format: date-time }
+                p_zona: { type: string, default: America/Mexico_City }
+      responses:
+        '200':
+          description: Totales del sistema, del periodo, por nodo y por día
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sistema: { type: object }
+                  resumen: { type: object }
+                  por_nodo: { type: array, items: { type: object } }
+                  por_dia: { type: array, items: { type: object } }
+        '403': { $ref: '#/components/responses/Error' }
+  /rest/v1/rpc/nodo_info:
+    post:
+      tags: [Operaciones de nodo]
+      summary: Datos del nodo dueño del API Key (prueba de conexión)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SoloApiKey' }
+      responses:
+        '200':
+          description: Datos del nodo
+          content: { application/json: { schema: { $ref: '#/components/schemas/NodoBasico' } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /rest/v1/rpc/crear_cuenta:
+    post:
+      tags: [Operaciones de nodo]
+      summary: Abrir una cuenta de cliente (solo sucursales)
+      description: El saldo inicial se registra como depósito y suma al efectivo de la sucursal.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [p_api_key, p_nombre_titular]
+              properties:
+                p_api_key: { type: string }
+                p_nombre_titular: { type: string, example: Juan Pérez }
+                p_saldo_inicial: { type: number, minimum: 0, default: 0, example: 1000 }
+      responses:
+        '200':
+          description: Cuenta creada
+          content: { application/json: { schema: { $ref: '#/components/schemas/Cuenta' } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /rest/v1/rpc/consultar_saldo:
+    post:
+      tags: [Operaciones de nodo]
+      summary: Consultar titular, saldo y estado de una cuenta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApiKeyYCuenta' }
+      responses:
+        '200':
+          description: Datos de la cuenta
+          content: { application/json: { schema: { $ref: '#/components/schemas/Cuenta' } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /rest/v1/rpc/retirar:
+    post:
+      tags: [Operaciones de nodo]
+      summary: Retirar efectivo
+      description: Exige saldo suficiente en la cuenta y efectivo suficiente en el nodo. Todo o nada.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Movimiento' }
+      responses:
+        '200':
+          description: Retiro registrado
+          content: { application/json: { schema: { $ref: '#/components/schemas/ResultadoMovimiento' } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409':
+          description: FONDOS_INSUFICIENTES o EFECTIVO_INSUFICIENTE_EN_NODO
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /rest/v1/rpc/depositar:
+    post:
+      tags: [Operaciones de nodo]
+      summary: Depositar a una cuenta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Movimiento' }
+      responses:
+        '200':
+          description: Depósito registrado
+          content: { application/json: { schema: { $ref: '#/components/schemas/ResultadoMovimiento' } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /rest/v1/rpc/transferir:
+    post:
+      tags: [Operaciones de nodo]
+      summary: Transferir entre dos cuentas
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [p_api_key, p_cuenta_origen, p_cuenta_destino, p_monto]
+              properties:
+                p_api_key: { type: string }
+                p_cuenta_origen: { type: string }
+                p_cuenta_destino: { type: string }
+                p_monto: { type: number, exclusiveMinimum: true, minimum: 0 }
+      responses:
+        '200':
+          description: Transferencia registrada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transaccion_id: { type: integer }
+                  tipo: { type: string, enum: [transferencia] }
+                  cuenta_origen: { type: string }
+                  cuenta_destino: { type: string }
+                  monto: { type: number }
+                  saldo_origen: { type: number }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /rest/v1/rpc/historial:
+    post:
+      tags: [Operaciones de nodo]
+      summary: Historial del nodo o de una cuenta
+      description: |
+        Sin `p_numero_cuenta`: operaciones hechas en el nodo. Con `p_numero_cuenta`: una sucursal
+        ve todos los movimientos de la cuenta; un cajero solo los hechos en ese cajero.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [p_api_key]
+              properties:
+                p_api_key: { type: string }
+                p_numero_cuenta: { type: string }
+                p_limite: { type: integer, default: 100, maximum: 1000 }
+      responses:
+        '200':
+          description: Transacciones, de la más reciente a la más antigua
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Transaccion' }
+        '401': { $ref: '#/components/responses/Error' }
+  /rest/v1/rpc/cuentas_de_sucursal:
+    post:
+      tags: [Operaciones de nodo]
+      summary: Cuentas abiertas en la sucursal (solo sucursales)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SoloApiKey' }
+      responses:
+        '200':
+          description: Cuentas de la sucursal
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/Cuenta'
+                    - type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        nodo_apertura_id: { type: string, format: uuid }
+                        created_at: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    ClaveAnon:
+      type: apiKey
+      in: header
+      name: apikey
+      description: Clave pública (anon / publishable) del proyecto de Supabase.
+    JwtAdmin:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: access_token obtenido en /auth/v1/token.
+  requestBodies:
+    Vacio:
+      content:
+        application/json:
+          schema: { type: object }
+  responses:
+    Error:
+      description: |
+        Error de la operación. El campo `message` trae el código: API_KEY_INVALIDA (401),
+        NO_AUTORIZADO, NODO_INACTIVO, CUENTA_BLOQUEADA, OPERACION_NO_PERMITIDA_PARA_ESTE_NODO (403),
+        CUENTA_NO_ENCONTRADA, NODO_NO_ENCONTRADO (404), FONDOS_INSUFICIENTES,
+        EFECTIVO_INSUFICIENTE_EN_NODO (409), MONTO_INVALIDO, NOMBRE_REQUERIDO (400).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      properties:
+        code: { type: string, example: PT409 }
+        message: { type: string, example: FONDOS_INSUFICIENTES }
+        details: { type: string, nullable: true }
+        hint: { type: string, nullable: true }
+    SoloApiKey:
+      type: object
+      required: [p_api_key]
+      properties:
+        p_api_key: { type: string, example: bk_suc_1a2b3c... }
+    ApiKeyYCuenta:
+      type: object
+      required: [p_api_key, p_numero_cuenta]
+      properties:
+        p_api_key: { type: string }
+        p_numero_cuenta: { type: string, example: '6976023998' }
+    Movimiento:
+      type: object
+      required: [p_api_key, p_numero_cuenta, p_monto]
+      properties:
+        p_api_key: { type: string }
+        p_numero_cuenta: { type: string, example: '6976023998' }
+        p_monto: { type: number, exclusiveMinimum: true, minimum: 0, example: 300 }
+    ResultadoMovimiento:
+      type: object
+      properties:
+        transaccion_id: { type: integer, example: 2 }
+        tipo: { type: string, enum: [retiro, deposito] }
+        numero_cuenta: { type: string }
+        monto: { type: number, example: 300 }
+        saldo: { type: number, example: 700 }
+        efectivo_nodo: { type: number, example: 1700 }
+    NodoBasico:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tipo: { type: string, enum: [sucursal, cajero] }
+        nombre: { type: string }
+        responsable: { type: string, nullable: true }
+        efectivo_disponible: { type: number }
+        estado: { type: string, enum: [activo, inactivo] }
+    Nodo:
+      allOf:
+        - $ref: '#/components/schemas/NodoBasico'
+        - type: object
+          properties:
+            api_key_prefijo: { type: string, example: bk_suc_1a2b3 }
+            created_at: { type: string, format: date-time }
+            operaciones: { type: integer }
+    Cuenta:
+      type: object
+      properties:
+        numero_cuenta: { type: string, example: '6976023998' }
+        nombre_titular: { type: string }
+        saldo: { type: number }
+        estado: { type: string, enum: [activa, bloqueada] }
+    Transaccion:
+      type: object
+      properties:
+        id: { type: integer }
+        cuenta_origen: { type: string, nullable: true }
+        cuenta_destino: { type: string, nullable: true }
+        monto: { type: number }
+        tipo: { type: string, enum: [retiro, deposito, transferencia] }
+        nodo_id: { type: string, format: uuid }
+        timestamp: { type: string, format: date-time }
