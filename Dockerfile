@@ -1,5 +1,4 @@
-# Imagen para desplegar el panel del Banco Central en Render (Web Service > Docker)
-FROM php:8.3-apache
+FROM php:8.4-apache
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends unzip git \
@@ -18,5 +17,4 @@ COPY . .
 RUN composer install --no-dev --optimize-autoloader --no-interaction \
     && chown -R www-data:www-data storage bootstrap/cache
 
-# Render asigna el puerto en la variable PORT (10000 por defecto)
 CMD ["sh", "-c", "sed -i \"s/Listen 80/Listen ${PORT:-10000}/\" /etc/apache2/ports.conf && sed -i \"s/:80>/:${PORT:-10000}>/\" /etc/apache2/sites-available/000-default.conf && php artisan config:cache && php artisan view:cache && apache2-foreground"]
