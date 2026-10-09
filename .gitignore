@@ -25,3 +25,9 @@ _ide_helper.php
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Local filesystem metadata and AI tooling configuration
+*:Zone.Identifier
+.claude
+.mcp.json
+boost.json

@@ -1,58 +1,75 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Banco Central · Panel de administración (Nodo 1)
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Panel en Laravel para los administradores del banco. No tiene base de datos propia:
+todo vive en Supabase y el panel lo consume por HTTP.
 
-## About Laravel
+- **Login:** Supabase Auth (correo y contraseña). Solo entran usuarios registrados en `public.admins`.
+- **Operaciones:** funciones `admin_*` de PostgreSQL llamadas por `POST /rest/v1/rpc/...` con el JWT del administrador.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Funcionalidades
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+| Requisito del examen | Dónde está |
+|---|---|
+| Crear sucursales y cajeros + API Key | Sucursales y cajeros > Nueva sucursal / Nuevo cajero. El API Key se muestra una sola vez; se puede regenerar. |
+| Efectivo real disponible | Columna "Efectivo disponible" y formulario Editar. |
+| Designar responsables | Formulario Editar (campo Responsable). |
+| Historial global por sucursal o cajero | Historial, con filtros por nodo, tipo, cuenta y fechas; exporta CSV. |
+| Reportes administrativos | Reportes: resumen del periodo, por nodo y por día; CSV e impresión/PDF. |
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+## Requisitos
 
-## Learning Laravel
+- PHP 8.3 o superior con las extensiones habituales de Laravel (curl, mbstring, xml, zip)
+- Composer 2
+- Proyecto de Supabase con `banco_central.sql` y `banco_central_02_panel.sql` ejecutados, en ese orden
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+## Instalación local
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+composer install
+cp .env.example .env
+php artisan key:generate
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+Editar `.env`:
 
-## Contributing
+```
+SUPABASE_URL=https://TU-PROYECTO.supabase.co
+SUPABASE_ANON_KEY=la clave "anon" o "publishable" (Project Settings > API)
+```
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+No usar la clave `service_role`. No hace falta `php artisan migrate`: sesiones y caché usan archivos.
 
-## Code of Conduct
+```bash
+php artisan serve
+```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+Abrir http://localhost:8000 e iniciar sesión con el administrador creado en Supabase.
 
-## Security Vulnerabilities
+## Estructura
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+| Archivo | Qué hace |
+|---|---|
+| `app/Services/Supabase.php` | Cliente HTTP: login, renovación de token y llamadas RPC |
+| `app/Http/Middleware/SupabaseAuth.php` | Protege las rutas y renueva el token antes de que caduque |
+| `app/Http/Controllers/NodoController.php` | Sucursales y cajeros, API Key, efectivo, responsables |
+| `app/Http/Controllers/TransaccionController.php` | Historial global y CSV |
+| `app/Http/Controllers/ReporteController.php` | Reportes y CSV |
+| `app/Exceptions/SupabaseException.php` | Traduce los errores de Supabase a mensajes |
+| `routes/web.php` | Rutas |
+| `resources/views/` | Pantallas (Blade) |
+| `public/css/app.css` | Estilos (sin Vite ni npm) |
 
-## License
+## Despliegue en Render
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+1. Subir este proyecto a un repositorio de GitHub.
+2. En Render: New > Web Service > conectar el repositorio > Runtime **Docker**.
+3. Variables de entorno:
+   - `APP_KEY` (salida de `php artisan key:generate --show`)
+   - `APP_ENV=production`, `APP_DEBUG=false`
+   - `APP_URL` con la URL que asigne Render
+   - `SUPABASE_URL`, `SUPABASE_ANON_KEY`
+   - `SESSION_DRIVER=file`, `CACHE_STORE=file`, `LOG_CHANNEL=stderr`
+4. Con Auto-Deploy activo, cada `git push` a `main` vuelve a desplegar.
+
+En el plan gratuito el servicio se duerme: abrirlo unos minutos antes de la demo.
+Al redesplegar se cierran las sesiones abiertas (se guardan en archivos del contenedor).
