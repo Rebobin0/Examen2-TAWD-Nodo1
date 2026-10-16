@@ -9,7 +9,7 @@
 <body>
     <header class="barra">
         <div class="barra-int">
-            <a class="logo" href="{{ route('dashboard') }}">Banco Central</a>
+            <a class="logo" href="{{ route('dashboard') }}">Banco Central Aca bien centralizado</a>
             <nav class="nav">
                 <a href="{{ route('dashboard') }}" @class(['activo' => request()->routeIs('dashboard')])>Inicio</a>
                 <a href="{{ route('nodos.index') }}" @class(['activo' => request()->routeIs('nodos.*')])>Sucursales y cajeros</a>
